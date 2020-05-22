@@ -1,10 +1,8 @@
 """A `dowel.logger.LogOutput` for CSV files."""
 import csv
-import warnings
 
 from dowel import TabularInput
 from dowel.simple_outputs import FileOutput
-from dowel.utils import colorize
 
 
 class CsvOutput(FileOutput):
@@ -17,8 +15,6 @@ class CsvOutput(FileOutput):
         super().__init__(file_name)
         self._writer = None
         self._fieldnames = None
-        self._warned_once = set()
-        self._disable_warnings = False
 
     @property
     def types_accepted(self):
@@ -28,6 +24,7 @@ class CsvOutput(FileOutput):
     def record(self, data, prefix=''):
         """Log tabular data to CSV."""
         if isinstance(data, TabularInput):
+
             to_csv = data.as_primitive_dict
 
             if not to_csv.keys() and not self._writer:
@@ -35,45 +32,43 @@ class CsvOutput(FileOutput):
 
             if not self._writer:
                 self._fieldnames = set(to_csv.keys())
-                self._writer = csv.DictWriter(
-                    self._log_file,
-                    fieldnames=self._fieldnames,
-                    extrasaction='ignore')
+                self._writer = csv.DictWriter(self._log_file,
+                                              fieldnames=self._fieldnames)
                 self._writer.writeheader()
 
-            if to_csv.keys() != self._fieldnames:
-                self._warn('Inconsistent TabularInput keys detected. '
-                           'CsvOutput keys: {}. '
-                           'TabularInput keys: {}. '
-                           'Did you change key sets after your first '
-                           'logger.log(TabularInput)?'.format(
-                               set(self._fieldnames), set(to_csv.keys())))
+            if set(to_csv.keys()) - self._fieldnames:
+                # setting the file pointer to the
+                # start of the file in order to rewrite the csv
+                self._log_file.seek(0)
+
+                # adding the new keys to the current fieldnames
+                for possible_newkey in set(to_csv.keys()):
+                    if possible_newkey not in self._fieldnames:
+                        self._fieldnames.add(possible_newkey)
+
+                # creating new writer object for new fieldnames
+                self._writer = csv.DictWriter(self._log_file,
+                                              fieldnames=self._fieldnames)
+
+                # reading past data to add new keys
+                tmp_file = self._log_file.name
+                with open(tmp_file, 'r+', newline='') as csvfile:
+                    tmp_reader = csv.DictReader(csvfile)
+                    tmp_data = []
+                    for old_data in tmp_reader:
+                        for field in self._fieldnames:
+                            if field not in old_data:
+                                old_data[field] = ''
+                        tmp_data.append(old_data)
+
+                self._writer.writeheader()
+                for i in tmp_data:
+                    self._writer.writerow(i)
 
             self._writer.writerow(to_csv)
 
             for k in to_csv.keys():
                 data.mark(k)
+
         else:
             raise ValueError('Unacceptable type.')
-
-    def _warn(self, msg):
-        """Warns the user using warnings.warn.
-
-        The stacklevel parameter needs to be 3 to ensure the call to logger.log
-        is the one printed.
-        """
-        if not self._disable_warnings and msg not in self._warned_once:
-            warnings.warn(
-                colorize(msg, 'yellow'), CsvOutputWarning, stacklevel=3)
-        self._warned_once.add(msg)
-        return msg
-
-    def disable_warnings(self):
-        """Disable logger warnings for testing."""
-        self._disable_warnings = True
-
-
-class CsvOutputWarning(UserWarning):
-    """Warning class for CsvOutput."""
-
-    pass
